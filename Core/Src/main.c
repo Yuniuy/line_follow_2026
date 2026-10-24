@@ -21,7 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "bsp_led.h"
+#include "bsp_key.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -63,6 +64,146 @@ static void MX_USART1_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* ==========================================================================
+ * 应用层：LED 演示（对应赛题 2a / 2b / 2c，还没有 OLED，先纯硬件验证）
+ *
+ *   上电      ：两灯同时快闪 3 次  -> 证明烧写链路 + 两个 LED 接线都通
+ *   按键 1 短按：LED1 常亮 <-> 常灭  （2a）
+ *   按键 2 短按：LED1/LED2 交替闪，30 秒 1 轮、共 3 轮，结束自动全灭（2b）
+ *   按键 4 短按：立即全部熄灭        （2c，即「返回主菜单后 LED 常灭」）
+ *
+ * 所有时间判断都用 HAL_GetTick() 差值，主循环里没有一个 HAL_Delay，
+ * 后面接 OLED 和循迹的时候可以直接把这些任务并排放着跑。
+ * ========================================================================== */
+
+typedef enum
+{
+  APP_LED_OFF = 0,   /* 常灭（默认） */
+  APP_LED_ON,        /* 常亮 */
+  APP_LED_ALT        /* 交替闪烁：ALT_ROUNDS 轮 × ALT_ROUND_MS */
+} app_led_mode_t;
+
+static app_led_mode_t s_led_mode   = APP_LED_OFF;
+static uint32_t       s_alt_start  = 0;   /* 本轮交替闪烁开始时刻 */
+static uint32_t       s_alt_toggle = 0;   /* 上次换灯时刻 */
+static uint8_t        s_alt_which  = 0;   /* 当前亮的是哪颗（0=LED1） */
+
+/**
+  * @brief 切换 LED 模式，并把该模式需要的计时器复位
+  */
+static void App_Led_SetMode(app_led_mode_t mode)
+{
+  uint32_t now = HAL_GetTick();
+
+  s_led_mode = mode;
+
+  switch (mode)
+  {
+    case APP_LED_ON:                       /* 2a：常亮 */
+      LED_On(LED_ID_1);
+      LED_Off(LED_ID_2);
+      break;
+
+    case APP_LED_ALT:                      /* 2b：交替闪烁 */
+      s_alt_start  = now;
+      s_alt_toggle = now;
+      s_alt_which  = 0;
+      LED_On(LED_ID_1);
+      LED_Off(LED_ID_2);
+      break;
+
+    case APP_LED_OFF:                      /* 2c：全灭 */
+    default:
+      LED_AllOff();
+      break;
+  }
+}
+
+/**
+  * @brief 上电自检：两灯快闪几次，肉眼确认板子在跑
+  */
+static void App_SelfTest(void)
+{
+  for (uint32_t i = 0; i < SELFTEST_BLINK_TIMES; i++)
+  {
+    LED_On(LED_ID_1);
+    LED_On(LED_ID_2);
+    HAL_Delay(SELFTEST_HALF_MS);
+
+    LED_Off(LED_ID_1);
+    LED_Off(LED_ID_2);
+    HAL_Delay(SELFTEST_HALF_MS);
+  }
+}
+
+/**
+  * @brief LED 任务：每圈主循环调一次，立即返回，不阻塞
+  */
+static void App_Led_Task(void)
+{
+  uint32_t now = HAL_GetTick();
+
+  /* ---------------- 1. 处理按键事件 ---------------- */
+
+  /* 按键 1：常亮 / 常灭 切换（2a） */
+  if (KEY_TakeEvent(KEY_ID_1, KEY_EVENT_CLICK))
+  {
+    if (s_led_mode == APP_LED_ON)
+    {
+      App_Led_SetMode(APP_LED_OFF);
+    }
+    else
+    {
+      App_Led_SetMode(APP_LED_ON);
+    }
+  }
+
+  /* 按键 2：启动交替闪烁（2b） */
+  if (KEY_TakeEvent(KEY_ID_2, KEY_EVENT_CLICK))
+  {
+    App_Led_SetMode(APP_LED_ALT);
+  }
+
+  /* 按键 3：暂时留空，留给后面的 OLED 菜单用 */
+  (void)KEY_TakeEvent(KEY_ID_3, KEY_EVENT_CLICK);
+
+  /* 按键 4：全部熄灭（2c） */
+  if (KEY_TakeEvent(KEY_ID_4, KEY_EVENT_CLICK))
+  {
+    App_Led_SetMode(APP_LED_OFF);
+  }
+
+  /* ---------------- 2. 交替闪烁状态机 ---------------- */
+
+  if (s_led_mode == APP_LED_ALT)
+  {
+    /* 3 轮跑完 -> 自动回常灭 */
+    if ((now - s_alt_start) >= (ALT_ROUND_MS * ALT_ROUNDS))
+    {
+      App_Led_SetMode(APP_LED_OFF);
+      return;
+    }
+
+    /* 到点换灯 */
+    if ((now - s_alt_toggle) >= ALT_HALF_MS)
+    {
+      s_alt_toggle = now;
+      s_alt_which ^= 1u;
+
+      if (s_alt_which)
+      {
+        LED_Off(LED_ID_1);
+        LED_On(LED_ID_2);
+      }
+      else
+      {
+        LED_On(LED_ID_1);
+        LED_Off(LED_ID_2);
+      }
+    }
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -98,7 +239,9 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  LED_Init();      /* 先保证两灯全灭 */
+  KEY_Init();      /* 按键引脚补上下拉 + 状态清零 */
+  App_SelfTest();  /* 上电快闪 3 次，看到闪烁说明程序真的在跑 */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,6 +251,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    KEY_Scan();      /* 非阻塞扫描，几十微秒返回 */
+    App_Led_Task();  /* 事件处理 + 闪烁计时，同样不阻塞 */
   }
   /* USER CODE END 3 */
 }

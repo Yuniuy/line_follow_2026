@@ -26,7 +26,10 @@ line_follow_2026/
 │   └── startup_stm32f103xb.s     启动文件
 ├── tools/
 │   └── fix_keil_after_cubemx.py  CubeMX 重新生成后的一键修复脚本
-├── src/                        业务代码（按键 / OLED / 电机 / 循迹）
+├── src/                       业务代码（全部手写，CubeMX 不会动这里）
+│   ├── bsp_config.h           唯一的引脚映射表 + 可调参数（改接线只改这个）
+│   ├── bsp_led.c / .h         LED 驱动（PB12 / PB13）
+│   └── bsp_key.c / .h         按键驱动（非阻塞扫描 + 消抖 + 短按/长按）
 └── docs/                       赛题资料、笔记、调试记录
 ```
 
@@ -40,9 +43,9 @@ line_follow_2026/
 |---|---|---|---|
 | 1a | OLED 主菜单（≥4 项，按键 1/2 移箭头） | 3 | ⬜ |
 | 1b | 子菜单（按键 3 进入 / 按键 4 返回） | 3 | ⬜ |
-| 2a | LED 常亮 / 常灭（按键 1 切换） | 2 | ⬜ |
-| 2b | LED 交替闪烁（3 轮 × 30 秒） | 2 | ⬜ |
-| 2c | 按键 4 返回主菜单后 LED 常灭 | 1 | ⬜ |
+| 2a | LED 常亮 / 常灭（按键 1 切换） | 2 | 🟨 代码已完成，待硬件验证 |
+| 2b | LED 交替闪烁（3 轮 × 30 秒） | 2 | 🟨 代码已完成，待硬件验证 |
+| 2c | 按键 4 返回主菜单后 LED 常灭 | 1 | 🟨 逻辑已实现，等菜单 |
 | 2d | OLED 显示 LED 状态（1 秒内更新） | 1 | ⬜ |
 | 3a | 信息显示（姓名拼音 / 学号 / 变量 a） | 2 | ⬜ |
 | 3b | 上位机修改变量 a（串口） | 3 | ⬜ |
@@ -80,6 +83,28 @@ line_follow_2026/
 | 电机驱动 | TB6612FNG | — |
 | 巡线 | TCRT5000 五路（数字输出） | — |
 
+### 引脚分配表
+
+> 全部定义集中在 `src/bsp_config.h`，**接线和这张表不一致时只改那一个文件**，
+> 其它 `.c` 一行都不用动。
+
+| 模块 | 信号 | 引脚 | 模式 |
+|---|---|---|---|
+| LED1 | LED1 | PB12 | 推挽输出 |
+| LED2 | LED2 | PB13 | 推挽输出 |
+| 蜂鸣器 | BUZZER | PB14 | 推挽输出 |
+| 按键 1 | KEY1 | PA0 | 输入 + 内部上拉 |
+| 按键 2 | KEY2 | PA1 | 输入 + 内部上拉 |
+| 按键 3 | KEY3 | PA2 | 输入 + 内部上拉 |
+| 按键 4 | KEY4 | PA3 | 输入 + 内部上拉 |
+| 巡线 1~5 | S1~S5 | PA4 / PA5 / PB0 / PB1 / PB15 | 输入（待硬件核对） |
+| 电机 PWMA | PWMA | PA6 (TIM3_CH1) | 复用·PWM |
+| 电机 PWMB | PWMB | PA7 (TIM3_CH2) | 复用·PWM |
+| 电机 AIN1/AIN2 | AIN1/AIN2 | PB8 / PB9 | 推挽输出 |
+| 电机 BIN1/BIN2 | BIN1/BIN2 | PA11 / PA12 | 推挽输出 |
+| OLED | SCL / SDA | PB6 / PB7 | I2C1 |
+| 串口 | TX / RX | PA9 / PA10 | USART1 · 115200 8N1 |
+
 ---
 
 ## 四、开发约定
@@ -103,6 +128,8 @@ line_follow_2026/
 | 10-25 | `armclang: error: no such file or directory: '../D:/Debug/line_follow_2026/Core/Src/main.c'` | 生成时 `Project Location=D:/Debug` 与 `Toolchain Folder Location=D:\Debug\line_follow_2026\` 不一致，CubeMX 写出「相对前缀 + 绝对路径」的拼接路径，Keil 从 MDK-ARM 解析后找不到 | 统一改回 `../Core/Src/xxx.c` |
 | 10-25 | 链接报 `L6200E: Symbol main multiply defined (by main_1.o and main.o)` 等 24 个重复定义 | 同一个路径错位问题，导致 `main.c / stm32f1xx_it.c / stm32f1xx_hal_msp.c` 被加进两个 Group（第二个组名是 `Application/User/D:/Debug/line_follow_2026/Core`），编译出两份 .o | 删除组名里嵌了盘符路径的重复 Group |
 | 10-25 | CubeMX 点 Generate Code 后长时间无反应，日志停在 `Download File stm32cube_fw_f1_v187.zip` | 生成前会校验固件包完整性，缺什么就联网补下（110MB 量级），不是死机 | 等待下载与解压完成（本次约 8 分钟），不要点关闭 |
+| 10-25 | 按键引脚 CubeMX 里配的是 `GPIO_NOPULL`，按键一端接 GND 时会悬空乱跳，读出来的值完全随机 | 轻触按键只是个开关，不按下时引脚必须由电阻拉到确定电平；内部上下拉没开就等于天线 | `bsp_key.c` 的 `KEY_Init()` 里按实际接线重新 `HAL_GPIO_Init()` 一遍补上内部上拉（`KEY_USE_INTERNAL_PULLUP`），不去改 CubeMX 配置，重新生成也不会丢 |
+| 10-25 | 把业务代码放 `src/` 后，CubeMX 一重新生成，Keil 里 BSP 组和 `../src` 包含路径全没了，编译报找不到 `bsp_led.h` | CubeMX 生成时会按模板把整个 `<Groups>` 重写，只认识自己生成的文件 | 给 `fix_keil_after_cubemx.py` 加第 4 项：扫描 `src/*.c` 自动重建 BSP 组 + 补 `../src` 包含路径，幂等 |
 
 > 以上前三个坑可以用一条命令一次性修好，不必手改 XML：
 >

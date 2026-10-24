@@ -3,9 +3,9 @@
 fix_keil_after_cubemx.py
 ========================
 用途：每次用 STM32CubeMX 重新生成 MDK-ARM 工程后，跑一遍这个脚本，
-      自动修掉 CubeMX 生成文件里的 3 个固定坑，避免 Keil 打不开 / 编译报错。
+      自动修掉 CubeMX 生成文件里的 4 个固定坑，避免 Keil 打不开 / 编译报错。
 
-修的 3 个坑：
+修的 4 个坑：
   坑 1  编译器版本：CubeMX 默认写 AC5（ARMCC V5），但 Keil 5.37+ 已删除 AC5，
         只有 AC6（armclang）。-> 自动补上 pCCUsed + uAC6，指向 AC6.
   坑 2  畸形文件路径：CubeMX 在 Project Location 与 Toolchain Folder Location
@@ -14,6 +14,10 @@ fix_keil_after_cubemx.py
   坑 3  重复文件组：同一个原因会让 Core 下的 .c 文件被加进两个 Group，
         编译出 main.o 和 main_1.o，链接时报 L6200E multiply defined.
         -> 自动删除组名里带盘符路径的那个重复组。
+  坑 4  自己写的源码被挤掉：CubeMX 重新生成时会按模板重写整个 <Groups>，
+        src/ 下的 bsp_*.c 和包含路径 ../src 都会丢，编译报 "cannot open
+        source input file" / "bsp_led.h: No such file".
+        -> 自动扫描 src/*.c 重建 BSP 组，并把 ../src 加进 IncludePath。
 
 用法（在任意目录都行）：
     python tools/fix_keil_after_cubemx.py
@@ -35,6 +39,9 @@ if sys.platform == "win32":
 
 # Keil MDK 5.40 自带的 AC6 版本标识：6220000::V6.22::ARMCLANG
 AC6_TAG = "6220000::V6.22::ARMCLANG"
+
+# 自己写的业务代码在工程里的分组名（src/*.c 都放这个组）
+BSP_GROUP_NAME = "Application/User/BSP"
 
 
 def find_project_file() -> Path:
@@ -116,6 +123,60 @@ def fix_duplicate_groups(text: str) -> tuple[str, str]:
     return text, "删除重复组: " + ", ".join(removed)
 
 
+def ensure_bsp_sources(text: str, repo_root: Path) -> tuple[str, str]:
+    """坑 4：CubeMX 重新生成时会把整个 <Groups> 按模板重写，
+    我们自己加的 BSP 组（src/*.c）和包含路径 ../src 会被抹掉。
+    这里扫描 src/ 目录自动补回来，幂等，跑几次结果都一样。"""
+    src_dir = repo_root / "src"
+    c_files = sorted(p.name for p in src_dir.glob("*.c")) if src_dir.is_dir() else []
+    if not c_files:
+        return text, "src/ 下没有 .c 文件，跳过"
+
+    # ---- 1. 包含路径补上 ../src ----
+    inc_note = ""
+    m = re.search(r"<IncludePath>([^<]*)</IncludePath>", text)
+    if not m:
+        return text, "× 没找到 IncludePath，跳过"
+    inc = m.group(1)
+    if "../src" not in inc.split(";"):
+        text = text.replace(f"<IncludePath>{inc}</IncludePath>",
+                            f"<IncludePath>../src;{inc}</IncludePath>", 1)
+        inc_note = "已加入 ../src"
+
+    # ---- 2. 生成 BSP 组 ----
+    files_xml = "\n".join(
+        "            <File>\n"
+        f"              <FileName>{name}</FileName>\n"
+        "              <FileType>1</FileType>\n"
+        f"              <FilePath>../src/{name}</FilePath>\n"
+        "            </File>" for name in c_files)
+
+    group_xml = ("        <Group>\n"
+                 f"          <GroupName>{BSP_GROUP_NAME}</GroupName>\n"
+                 "          <Files>\n"
+                 f"{files_xml}\n"
+                 "          </Files>\n"
+                 "        </Group>\n")
+
+    group_pat = re.compile(
+        r"[ \t]*<Group>\s*<GroupName>" + re.escape(BSP_GROUP_NAME) +
+        r"</GroupName>.*?</Group>(\s*)", re.S)
+
+    if group_pat.search(text):
+        text = group_pat.sub(lambda _m: group_xml, text, count=1)
+        msg = f"同步 BSP 组（{len(c_files)} 个文件）"
+    else:
+        anchor = "<Group>\n          <GroupName>Drivers/STM32F1xx_HAL_Driver</GroupName>"
+        if anchor not in text:
+            return text, "× 没找到 Drivers 组锚点，未加 BSP 组"
+        text = text.replace(anchor, group_xml + anchor, 1)
+        msg = f"新建 BSP 组（{len(c_files)} 个文件）"
+
+    if inc_note:
+        msg += "，" + inc_note
+    return text, msg
+
+
 def main():
     prj = Path(sys.argv[1]) if len(sys.argv) > 1 else find_project_file()
     print(f"工程文件: {prj}")
@@ -136,6 +197,7 @@ def main():
     text, msg1 = fix_compiler(text)
     text, msg2 = fix_paths(text)
     text, msg3 = fix_duplicate_groups(text)
+    text, msg4 = ensure_bsp_sources(text, prj.resolve().parent.parent)
 
     # XML 收尾：清理可能出现的连续空行
     text = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n", text)
@@ -147,6 +209,7 @@ def main():
     print("  [1] 编译器  ->", msg1)
     print("  [2] 文件路径 ->", msg2)
     print("  [3] 重复文件组 ->", msg3)
+    print("  [4] BSP 源码组 ->", msg4)
     print("\n完成。现在用 Keil 打开工程按 F7，或者在命令行执行：")
     print('  "D:\\STM32_TOOLS\\keil MDK\\CORE\\UV4\\UV4.exe" -r '
           f'"{prj}" -j0 -o "{prj.parent / "build.log"}"')
