@@ -21,7 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "bsp_led.h"
+#include "bsp_key.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -63,6 +64,115 @@ static void MX_USART1_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+typedef enum
+{
+  APP_LED_OFF = 0,
+  APP_LED_ON,
+  APP_LED_ALT
+} app_led_mode_t;
+
+static app_led_mode_t s_led_mode   = APP_LED_OFF;
+static uint32_t       s_alt_start  = 0;
+static uint32_t       s_alt_toggle = 0;
+static uint8_t        s_alt_which  = 0;
+
+static void App_Led_SetMode(app_led_mode_t mode)
+{
+  uint32_t now = HAL_GetTick();
+
+  s_led_mode = mode;
+
+  switch (mode)
+  {
+    case APP_LED_ON:
+      LED_On(LED_ID_1);
+      LED_Off(LED_ID_2);
+      break;
+
+    case APP_LED_ALT:
+      s_alt_start  = now;
+      s_alt_toggle = now;
+      s_alt_which  = 0;
+      LED_On(LED_ID_1);
+      LED_Off(LED_ID_2);
+      break;
+
+    case APP_LED_OFF:
+    default:
+      LED_AllOff();
+      break;
+  }
+}
+
+static void App_SelfTest(void)
+{
+  for (uint32_t i = 0; i < SELFTEST_BLINK_TIMES; i++)
+  {
+    LED_On(LED_ID_1);
+    LED_On(LED_ID_2);
+    HAL_Delay(SELFTEST_HALF_MS);
+
+    LED_Off(LED_ID_1);
+    LED_Off(LED_ID_2);
+    HAL_Delay(SELFTEST_HALF_MS);
+  }
+}
+
+static void App_Led_Task(void)
+{
+  uint32_t now = HAL_GetTick();
+
+  if (KEY_TakeEvent(KEY_ID_1, KEY_EVENT_CLICK))
+  {
+    if (s_led_mode == APP_LED_ON)
+    {
+      App_Led_SetMode(APP_LED_OFF);
+    }
+    else
+    {
+      App_Led_SetMode(APP_LED_ON);
+    }
+  }
+
+  if (KEY_TakeEvent(KEY_ID_2, KEY_EVENT_CLICK))
+  {
+    App_Led_SetMode(APP_LED_ALT);
+  }
+
+  (void)KEY_TakeEvent(KEY_ID_3, KEY_EVENT_CLICK);
+
+  if (KEY_TakeEvent(KEY_ID_4, KEY_EVENT_CLICK))
+  {
+    App_Led_SetMode(APP_LED_OFF);
+  }
+
+  if (s_led_mode == APP_LED_ALT)
+  {
+    if ((now - s_alt_start) >= (ALT_ROUND_MS * ALT_ROUNDS))
+    {
+      App_Led_SetMode(APP_LED_OFF);
+      return;
+    }
+
+    if ((now - s_alt_toggle) >= ALT_HALF_MS)
+    {
+      s_alt_toggle = now;
+      s_alt_which ^= 1u;
+
+      if (s_alt_which)
+      {
+        LED_Off(LED_ID_1);
+        LED_On(LED_ID_2);
+      }
+      else
+      {
+        LED_On(LED_ID_1);
+        LED_Off(LED_ID_2);
+      }
+    }
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -98,7 +208,9 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  LED_Init();
+  KEY_Init();
+  App_SelfTest();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,6 +220,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    KEY_Scan();
+    App_Led_Task();
   }
   /* USER CODE END 3 */
 }
