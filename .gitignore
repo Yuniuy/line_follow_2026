@@ -1,0 +1,57 @@
+# 忽略编译产物和临时文件，源码与工程配置必须提交
+
+# ===== Keil MDK =====
+Objects/
+Listings/
+RTE/
+*.uvguix.*
+*.uvoptx.bak
+*.bak
+*.hex
+*.bin
+*.axf
+*.elf
+*.map
+*.o
+*.d
+*.crf
+*.dep
+*.lst
+*.lnp
+*.sct
+*.build_log.htm
+*.htm
+JLinkLog.txt
+EventRecorderStub.scvd
+
+# ===== STM32CubeIDE =====
+Debug/
+Release/
+.settings/
+.cproject.bak
+*.launch
+
+# ===== CLion / CMake =====
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+.idea/
+
+# ===== VS Code =====
+.vscode/
+*.code-workspace
+
+# ===== 编译中间产物 =====
+build/
+out/
+*.obj
+*.pdb
+*.ilk
+
+# ===== 系统与编辑器 =====
+Thumbs.db
+desktop.ini
+.DS_Store
+*.tmp
+*.swp
+~$*
