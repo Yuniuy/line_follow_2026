@@ -20,6 +20,7 @@ RTE/
 *.lnp
 *.sct
 *.build_log.htm
+build.log
 *.htm
 JLinkLog.txt
 EventRecorderStub.scvd

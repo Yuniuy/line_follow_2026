@@ -14,11 +14,20 @@
 
 ```
 line_follow_2026/
-├── README.md           本文件
-├── .gitignore          忽略编译产物
-├── src/                源码
-├── docs/               赛题资料、笔记、调试记录
-└── (工程文件)            Keil 工程 / CubeMX .ioc 文件
+├── README.md                   本文件
+├── .gitignore                  忽略编译产物
+├── line_follow_2026.ioc        CubeMX 工程配置（改引脚/时钟靠它）
+├── Core/
+│   ├── Inc/                    main.h / stm32f1xx_hal_conf.h / stm32f1xx_it.h
+│   └── Src/                    main.c / stm32f1xx_it.c / stm32f1xx_hal_msp.c
+├── Drivers/                    STM32F1 HAL 库 + CMSIS（勿手改）
+├── MDK-ARM/
+│   ├── line_follow_2026.uvprojx  Keil 工程
+│   └── startup_stm32f103xb.s     启动文件
+├── tools/
+│   └── fix_keil_after_cubemx.py  CubeMX 重新生成后的一键修复脚本
+├── src/                        业务代码（按键 / OLED / 电机 / 循迹）
+└── docs/                       赛题资料、笔记、调试记录
 ```
 
 ---
@@ -90,4 +99,29 @@ line_follow_2026/
 
 | 日期 | 问题 | 原因 | 解决 |
 |---|---|---|---|
-| | | | |
+| 10-25 | Keil 编译报 `uses ARM-Compiler 'Default Compiler Version 5' which is not available`，直接 Build aborted | CubeMX 生成的 `.uvprojx` 里没有 `<pCCUsed>` 字段，Keil 兜底去找 AC5；而 MDK 从 5.37 起已彻底移除 AC5，本机只有 AC6（armclang 6.22） | 在 `<Target>` 下补 `<pCCUsed>6220000::V6.22::ARMCLANG</pCCUsed>` 与 `<uAC6>1</uAC6>` |
+| 10-25 | `armclang: error: no such file or directory: '../D:/Debug/line_follow_2026/Core/Src/main.c'` | 生成时 `Project Location=D:/Debug` 与 `Toolchain Folder Location=D:\Debug\line_follow_2026\` 不一致，CubeMX 写出「相对前缀 + 绝对路径」的拼接路径，Keil 从 MDK-ARM 解析后找不到 | 统一改回 `../Core/Src/xxx.c` |
+| 10-25 | 链接报 `L6200E: Symbol main multiply defined (by main_1.o and main.o)` 等 24 个重复定义 | 同一个路径错位问题，导致 `main.c / stm32f1xx_it.c / stm32f1xx_hal_msp.c` 被加进两个 Group（第二个组名是 `Application/User/D:/Debug/line_follow_2026/Core`），编译出两份 .o | 删除组名里嵌了盘符路径的重复 Group |
+| 10-25 | CubeMX 点 Generate Code 后长时间无反应，日志停在 `Download File stm32cube_fw_f1_v187.zip` | 生成前会校验固件包完整性，缺什么就联网补下（110MB 量级），不是死机 | 等待下载与解压完成（本次约 8 分钟），不要点关闭 |
+
+> 以上前三个坑可以用一条命令一次性修好，不必手改 XML：
+>
+> ```bash
+> python tools/fix_keil_after_cubemx.py
+> ```
+>
+> 脚本会自动补 AC6 标识、修正畸形路径、删掉重复文件组，并保留 `.bak` 备份。
+> 每次用 CubeMX 重新生成代码后跑一遍即可。
+
+---
+
+## 六、环境速查
+
+| 项目 | 路径 / 版本 |
+|---|---|
+| Keil MDK | `D:\STM32_TOOLS\keil MDK\`（MDK Plus 5.40） |
+| ARM 编译器 | Arm Compiler for Embedded 6.22（AC6，不含 AC5） |
+| 器件包 | `D:\STM32_TOOLS\keil MDK\PACK\Keil\STM32F1xx_DFP\2.4.1` |
+| CubeMX 固件包 | `C:\Users\KSCIN\STM32Cube\Repository\STM32Cube_FW_F1_V1.8.7` |
+| 命令行编译 | `UV4.exe -r 工程.uvprojx -j0 -o build.log`（退出码 0=无错无警告） |
+
