@@ -5,7 +5,9 @@ Objects/
 Listings/
 RTE/
 *.uvguix.*
+*.uvoptx
 *.uvoptx.bak
+*.uvprojx.bak
 *.bak
 *.hex
 *.bin
